@@ -286,6 +286,59 @@ function deleteSession(id) {
 }
 
 // ---------------------------------------------------------------------------
+// applyFilterStandalone — testable filter helper
+// ---------------------------------------------------------------------------
+
+/**
+ * Apply a filter mode and optional search text to a sessions array.
+ *
+ * @param {object[]} sessions       - Full sessions array (from scanSessions)
+ * @param {string[]} filterModes    - Array of mode strings, e.g. ['all', 'project:~/Desktop', 'small', 'old']
+ * @param {number}   filterModeIndex - Index into filterModes
+ * @param {string}   searchText     - Current search query (empty string = no search)
+ * @returns {{ filtered: object[], filterLabel: string }}
+ */
+function applyFilterStandalone(sessions, filterModes, filterModeIndex, searchText) {
+  let result = [...sessions];
+
+  if (searchText) {
+    const q = searchText.toLowerCase();
+    result = result.filter(s =>
+      s.firstMessage.toLowerCase().includes(q) ||
+      s.project.toLowerCase().includes(q)
+    );
+  }
+
+  const mode = filterModes[filterModeIndex];
+  if (mode === 'all') { /* no-op */ }
+  else if (mode.startsWith('project:')) {
+    result = result.filter(s => s.project === mode.slice(8));
+  }
+  else if (mode === 'small') {
+    result = result.filter(s => s.size < 100 * 1024);
+  }
+  else if (mode === 'old') {
+    const threshold = Date.now() - 30 * 24 * 60 * 60 * 1000;
+    result = result.filter(s => s.modified.getTime() < threshold);
+  }
+
+  let filterLabel;
+  if (searchText) {
+    filterLabel = `Search: ${searchText}\u2588`;
+  } else if (mode === 'all') {
+    filterLabel = `Sessions (${result.length})`;
+  } else if (mode.startsWith('project:')) {
+    filterLabel = `Sessions (${result.length}) \u203a ${mode.slice(8)}`;
+  } else if (mode === 'small') {
+    filterLabel = `Sessions (${result.length}) \u203a < 100K`;
+  } else if (mode === 'old') {
+    filterLabel = `Sessions (${result.length}) \u203a > 30 days`;
+  }
+
+  return { filtered: result, filterLabel };
+}
+
+// ---------------------------------------------------------------------------
 // TTY detection
 // ---------------------------------------------------------------------------
 
@@ -502,49 +555,15 @@ function runInteractive() {
     filterLabel: `Sessions (${allSessions.length})`,
   };
 
-  // 5. applyFilter function
+  // 5. applyFilter function — delegates to applyFilterStandalone
   function applyFilter() {
-    let result = [...state.sessions];
-
-    // Apply search first
-    if (state.searchText) {
-      const q = state.searchText.toLowerCase();
-      result = result.filter(s =>
-        s.firstMessage.toLowerCase().includes(q) ||
-        s.project.toLowerCase().includes(q)
-      );
-    }
-
-    // Apply filter mode
-    const mode = filterModes[state.filterModeIndex];
-    if (mode === 'all') {
-      // no-op
-    } else if (mode.startsWith('project:')) {
-      const proj = mode.slice(8);
-      result = result.filter(s => s.project === proj);
-    } else if (mode === 'small') {
-      result = result.filter(s => s.size < 100 * 1024);
-    } else if (mode === 'old') {
-      const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
-      result = result.filter(s => s.modified.getTime() < thirtyDaysAgo);
-    }
-
-    state.filtered = result;
-    state.cursor = Math.min(state.cursor, Math.max(0, result.length - 1));
-    state.scrollOffset = Math.min(state.scrollOffset, Math.max(0, result.length - 1));
-
-    // Update filter label
-    if (state.searchText) {
-      state.filterLabel = `Search: ${state.searchText}\u2588`;
-    } else if (mode === 'all') {
-      state.filterLabel = `Sessions (${result.length})`;
-    } else if (mode.startsWith('project:')) {
-      state.filterLabel = `Sessions (${result.length}) \u203a ${mode.slice(8)}`;
-    } else if (mode === 'small') {
-      state.filterLabel = `Sessions (${result.length}) \u203a < 100K`;
-    } else if (mode === 'old') {
-      state.filterLabel = `Sessions (${result.length}) \u203a > 30 days`;
-    }
+    const { filtered, filterLabel } = applyFilterStandalone(
+      state.sessions, filterModes, state.filterModeIndex, state.searchText
+    );
+    state.filtered = filtered;
+    state.cursor = Math.min(state.cursor, Math.max(0, filtered.length - 1));
+    state.scrollOffset = Math.min(state.scrollOffset, Math.max(0, filtered.length - 1));
+    state.filterLabel = filterLabel;
   }
 
   // Expose for testing
@@ -1229,6 +1248,7 @@ function renderNoMatches(tty, state) {
 module.exports = {
   scanSessions,
   formatSize,
+  applyFilterStandalone,
   listSessions,
   previewSession,
   deleteSession,
