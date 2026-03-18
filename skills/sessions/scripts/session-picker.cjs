@@ -447,14 +447,307 @@ function handleDelete(id) {
 }
 
 // ---------------------------------------------------------------------------
-// Interactive mode (placeholder — TUI implementation comes in a later task)
+// Interactive mode — TUI input handler and main loop (Task 5)
 // ---------------------------------------------------------------------------
 
+// Exported reference so tests can call applyFilter after runInteractive sets it
+let _applyFilter = null;
+
 function runInteractive() {
-  // Placeholder: future tasks will implement the full blessed/ink TUI here.
-  // For now we emit a no-op summary so callers can parse a valid JSON line.
-  process.stdout.write(JSON.stringify({ mode: 'interactive', deleted: [], remaining: listSessions().length }) + '\n');
-  process.exit(0);
+  // 1. Try opening /dev/tty for both input and output
+  let ttyFd;
+  try {
+    ttyFd = fs.openSync('/dev/tty', 'r+');
+  } catch (_) {
+    // Fall back to CLI mode
+    process.stdout.write(JSON.stringify({ mode: 'cli', reason: 'no-tty' }) + '\n');
+    return;
+  }
+
+  const tty = require('tty');
+  const ttyReadStream = new tty.ReadStream(ttyFd);
+  const ttyWriteStream = new tty.WriteStream(ttyFd);
+
+  // Try raw mode
+  try {
+    ttyReadStream.setRawMode(true);
+  } catch (_) {
+    fs.closeSync(ttyFd);
+    process.stdout.write(JSON.stringify({ mode: 'cli', reason: 'no-tty' }) + '\n');
+    return;
+  }
+
+  // 2. Scan sessions
+  const allSessions = scanSessions(PROJECTS_DIR);
+  const deleted = []; // track deleted session IDs
+
+  // 3. Build filter modes
+  const uniqueProjects = [...new Set(allSessions.map(s => s.project))].sort();
+  const filterModes = ['all', ...uniqueProjects.map(p => 'project:' + p), 'small', 'old'];
+
+  // 4. Initialize state
+  const state = {
+    sessions: allSessions,
+    filtered: [...allSessions],
+    cursor: 0,
+    scrollOffset: 0,
+    filterModeIndex: 0,
+    searchText: '',
+    mode: 'list', // 'list' | 'preview' | 'confirm'
+    previewScroll: 0,
+    previewMessages: [],
+    previewTotalLines: 0,
+    termWidth: ttyWriteStream.columns || 80,
+    termHeight: ttyWriteStream.rows || 24,
+    filterLabel: `Sessions (${allSessions.length})`,
+  };
+
+  // 5. applyFilter function
+  function applyFilter() {
+    let result = [...state.sessions];
+
+    // Apply search first
+    if (state.searchText) {
+      const q = state.searchText.toLowerCase();
+      result = result.filter(s =>
+        s.firstMessage.toLowerCase().includes(q) ||
+        s.project.toLowerCase().includes(q)
+      );
+    }
+
+    // Apply filter mode
+    const mode = filterModes[state.filterModeIndex];
+    if (mode === 'all') {
+      // no-op
+    } else if (mode.startsWith('project:')) {
+      const proj = mode.slice(8);
+      result = result.filter(s => s.project === proj);
+    } else if (mode === 'small') {
+      result = result.filter(s => s.size < 100 * 1024);
+    } else if (mode === 'old') {
+      const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
+      result = result.filter(s => s.modified.getTime() < thirtyDaysAgo);
+    }
+
+    state.filtered = result;
+    state.cursor = Math.min(state.cursor, Math.max(0, result.length - 1));
+    state.scrollOffset = Math.min(state.scrollOffset, Math.max(0, result.length - 1));
+
+    // Update filter label
+    if (state.searchText) {
+      state.filterLabel = `Search: ${state.searchText}\u2588`;
+    } else if (mode === 'all') {
+      state.filterLabel = `Sessions (${result.length})`;
+    } else if (mode.startsWith('project:')) {
+      state.filterLabel = `Sessions (${result.length}) \u203a ${mode.slice(8)}`;
+    } else if (mode === 'small') {
+      state.filterLabel = `Sessions (${result.length}) \u203a < 100K`;
+    } else if (mode === 'old') {
+      state.filterLabel = `Sessions (${result.length}) \u203a > 30 days`;
+    }
+  }
+
+  // Expose for testing
+  _applyFilter = applyFilter;
+
+  // 6. render function (dispatches to appropriate renderer)
+  function render() {
+    if (state.sessions.length === 0) {
+      renderEmpty(ttyWriteStream, state);
+      return;
+    }
+    if (state.mode === 'list') {
+      if (state.filtered.length === 0) {
+        renderNoMatches(ttyWriteStream, state);
+      } else {
+        renderList(ttyWriteStream, state);
+      }
+    } else if (state.mode === 'preview') {
+      renderPreview(ttyWriteStream, state, state.previewMessages);
+    }
+    // confirm mode: renderDeleteConfirm is drawn as overlay after renderList
+  }
+
+  // 7. cleanExit function
+  function cleanExit() {
+    exitAltScreen(ttyWriteStream);
+    ttyReadStream.setRawMode(false);
+    ttyReadStream.destroy();
+    ttyWriteStream.destroy();
+    // Print summary to actual stdout (not tty)
+    process.stdout.write(JSON.stringify({
+      action: 'exit',
+      deleted: deleted,
+      remaining: state.sessions.length
+    }) + '\n');
+    process.exit(0);
+  }
+
+  // 8. SIGWINCH handler
+  process.on('SIGWINCH', () => {
+    state.termWidth = ttyWriteStream.columns || 80;
+    state.termHeight = ttyWriteStream.rows || 24;
+    render();
+  });
+
+  // 9. handleKey state machine
+  function handleKey(key, char) {
+    const viewportSize = Math.floor((state.termHeight - 4) / 2);
+
+    if (state.mode === 'list') {
+      if (key === 'up') {
+        if (state.cursor > 0) {
+          state.cursor--;
+          if (state.cursor < state.scrollOffset) state.scrollOffset = state.cursor;
+        }
+        render();
+      } else if (key === 'down') {
+        if (state.cursor < state.filtered.length - 1) {
+          state.cursor++;
+          if (state.cursor >= state.scrollOffset + viewportSize) {
+            state.scrollOffset = state.cursor - viewportSize + 1;
+          }
+        }
+        render();
+      } else if (key === 'enter') {
+        if (state.filtered.length > 0) {
+          const session = state.filtered[state.cursor];
+          state.previewMessages = parseMessages(session.filePath);
+          state.previewScroll = 0;
+          state.mode = 'preview';
+          render();
+        }
+      } else if (key === 'backspace') {
+        if (state.searchText) {
+          state.searchText = state.searchText.slice(0, -1);
+          applyFilter();
+          state.cursor = 0;
+          state.scrollOffset = 0;
+          render();
+        } else if (state.filtered.length > 0) {
+          // Show delete confirmation
+          state.mode = 'confirm';
+          render(); // render list first
+          renderDeleteConfirm(ttyWriteStream, state, state.filtered[state.cursor]);
+        }
+      } else if (key === 'tab') {
+        state.filterModeIndex = (state.filterModeIndex + 1) % filterModes.length;
+        state.searchText = ''; // clear search when changing filter
+        applyFilter();
+        state.cursor = 0;
+        state.scrollOffset = 0;
+        render();
+      } else if (key === 'esc') {
+        if (state.searchText) {
+          state.searchText = '';
+          applyFilter();
+          state.cursor = 0;
+          state.scrollOffset = 0;
+          render();
+        } else {
+          cleanExit();
+        }
+      } else if (key === 'char') {
+        state.searchText += char;
+        applyFilter();
+        state.cursor = 0;
+        state.scrollOffset = 0;
+        render();
+      }
+    } else if (state.mode === 'preview') {
+      if (key === 'up') {
+        if (state.previewScroll > 0) {
+          state.previewScroll--;
+          render();
+        }
+      } else if (key === 'down') {
+        state.previewScroll++;
+        render();
+      } else if (key === 'esc') {
+        state.mode = 'list';
+        state.previewScroll = 0;
+        render();
+      }
+    } else if (state.mode === 'confirm') {
+      if (key === 'char' && char === 'y' || key === 'char' && char === 'Y') {
+        const session = state.filtered[state.cursor];
+        try {
+          // Delete the .jsonl file
+          fs.unlinkSync(session.filePath);
+          // Delete session subdirectory if exists
+          const subdir = path.join(path.dirname(session.filePath), session.sessionId);
+          if (fs.existsSync(subdir)) {
+            fs.rmSync(subdir, { recursive: true, force: true });
+          }
+          deleted.push(session.sessionId);
+          // Remove from sessions array
+          state.sessions = state.sessions.filter(s => s.sessionId !== session.sessionId);
+          applyFilter();
+          state.cursor = Math.min(state.cursor, Math.max(0, state.filtered.length - 1));
+        } catch (err) {
+          // silently continue on error
+        }
+        state.mode = 'list';
+        render();
+      } else if (key === 'char' && (char === 'n' || char === 'N') || key === 'esc') {
+        state.mode = 'list';
+        render();
+      }
+    }
+  }
+
+  // 10. Input handler with escape sequence disambiguation
+  let escBuffer = '';
+  let escTimer = null;
+
+  ttyReadStream.on('data', (buf) => {
+    const data = buf.toString('utf8');
+
+    for (let i = 0; i < data.length; i++) {
+      const ch = data[i];
+
+      if (escBuffer) {
+        escBuffer += ch;
+        clearTimeout(escTimer);
+
+        // Check for complete escape sequences
+        if (escBuffer === '\x1b[A') { handleKey('up'); escBuffer = ''; continue; }
+        if (escBuffer === '\x1b[B') { handleKey('down'); escBuffer = ''; continue; }
+        if (escBuffer.length >= 3) { escBuffer = ''; continue; } // unknown sequence, discard
+
+        // Still buffering, set new timer
+        escTimer = setTimeout(() => {
+          if (escBuffer === '\x1b') handleKey('esc');
+          escBuffer = '';
+        }, 50);
+        continue;
+      }
+
+      if (ch === '\x1b') {
+        escBuffer = '\x1b';
+        escTimer = setTimeout(() => {
+          if (escBuffer === '\x1b') handleKey('esc');
+          escBuffer = '';
+        }, 50);
+        continue;
+      }
+
+      if (ch === '\r') { handleKey('enter'); continue; }
+      if (ch === '\x7f') { handleKey('backspace'); continue; }
+      if (ch === '\t') { handleKey('tab'); continue; }
+      if (ch === '\x03') { cleanExit(); return; }
+
+      // Printable chars (0x20-0x7E)
+      const code = ch.charCodeAt(0);
+      if (code >= 0x20 && code <= 0x7e) {
+        handleKey('char', ch);
+      }
+    }
+  });
+
+  // 11. Enter alt screen and render
+  enterAltScreen(ttyWriteStream);
+  render();
 }
 
 // ---------------------------------------------------------------------------
@@ -953,4 +1246,7 @@ module.exports = {
   renderDeleteConfirm,
   renderEmpty,
   renderNoMatches,
+  // TUI input handler (Task 5)
+  runInteractive,
+  get applyFilter() { return _applyFilter; },
 };
