@@ -1,7 +1,7 @@
 # Session Manager Plugin — Design Spec
 
 **Date:** 2026-03-18
-**Status:** Draft
+**Status:** Approved
 **Target issue:** [anthropics/claude-code#16901](https://github.com/anthropics/claude-code/issues/16901) — Add `/list-sessions` and `/delete-session` slash commands
 
 ## Problem
@@ -253,7 +253,7 @@ This is a single flat cycle — no nested modes, no ambiguity. Tab always advanc
 
 ## Edge Cases
 
-- **No sessions found:** Display centered message "No sessions found" with Esc to quit
+- **No sessions found / missing projects dir:** Display centered message "No sessions found" with Esc to quit. If `~/.claude/projects/` does not exist, treat as empty (no error).
 - **Empty search results:** Display "No matches" in list area, keep search active
 - **Terminal resize:** Listen for `SIGWINCH`, recalculate layout, redraw
 - **Very long first messages:** Truncate to terminal width minus padding
