@@ -105,6 +105,22 @@ test('messageCount counts only user-type entries — sess-001 has 3', () => {
   assert.strictEqual(s001.messageCount, 3, `expected messageCount 3, got ${s001.messageCount}`);
 });
 
+// Test 8: customTitle extracted from custom-title entries
+test('extracts customTitle from /rename — sess-001 has "auth-system"', () => {
+  sessions = scanSessions(FIXTURES_DIR, SCAN_OPTS);
+  const s001 = sessions.find(s => s.sessionId === 'sess-001');
+  assert.ok(s001, 'sess-001 should be present');
+  assert.strictEqual(s001.customTitle, 'auth-system', `expected customTitle "auth-system", got "${s001.customTitle}"`);
+});
+
+// Test 9: sessions without custom-title have empty customTitle
+test('sessions without /rename have empty customTitle', () => {
+  sessions = scanSessions(FIXTURES_DIR, SCAN_OPTS);
+  const s003 = sessions.find(s => s.sessionId === 'sess-003');
+  assert.ok(s003, 'sess-003 should be present');
+  assert.strictEqual(s003.customTitle, '', `expected empty customTitle, got "${s003.customTitle}"`);
+});
+
 // ---------------------------------------------------------------------------
 // formatSize tests
 // ---------------------------------------------------------------------------

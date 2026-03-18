@@ -188,9 +188,10 @@ function scanSessions(projectsDir, options) {
         project = projectFromDirName(dirName);
       }
 
-      // Count user messages and find first user message text
+      // Count user messages, find first user message text, and extract custom title
       let messageCount = 0;
       let firstMessage = '';
+      let customTitle = '';
 
       for (const line of lines) {
         try {
@@ -213,12 +214,16 @@ function scanSessions(projectsDir, options) {
               }
             }
           }
+          // /rename writes custom-title entries — last one wins
+          if (parsed.type === 'custom-title' && parsed.customTitle) {
+            customTitle = parsed.customTitle;
+          }
         } catch (_) {
           // ignore malformed lines
         }
       }
 
-      results.push({ sessionId, project, modified, size, messageCount, firstMessage, filePath });
+      results.push({ sessionId, project, modified, size, messageCount, firstMessage, customTitle, filePath });
     }
   }
 
@@ -306,7 +311,8 @@ function applyFilterStandalone(sessions, filterModes, filterModeIndex, searchTex
     const q = searchText.toLowerCase();
     result = result.filter(s =>
       s.firstMessage.toLowerCase().includes(q) ||
-      s.project.toLowerCase().includes(q)
+      s.project.toLowerCase().includes(q) ||
+      (s.customTitle && s.customTitle.toLowerCase().includes(q))
     );
   }
 
@@ -534,6 +540,7 @@ function handleList() {
   const raw = scanSessions(PROJECTS_DIR);
   const sessions = raw.map(s => ({
     id: s.sessionId,
+    name: s.customTitle || null,
     project: s.project,
     modified: s.modified.toISOString().slice(0, 10),
     size: formatSize(s.size),
@@ -1070,11 +1077,14 @@ function renderList(tty, state) {
       tty.write(metaLine);
     }
 
-    // Message line
-    const msgText = truncate('  ' + (session.firstMessage || ''), W);
+    // Message line — show custom title (from /rename) if available, otherwise first message
+    const displayText = session.customTitle
+      ? '\u2605 ' + session.customTitle  // ★ prefix for named sessions
+      : (session.firstMessage || '');
+    const msgText = truncate('  ' + displayText, W);
     moveTo(tty, msgRow, 1);
     clearLine(tty);
-    tty.write(style(msgText, '2'));
+    tty.write(session.customTitle ? style(msgText, '33') : style(msgText, '2')); // yellow for named, dim for unnamed
   }
 
   // Line H-1 — bottom divider
@@ -1111,7 +1121,7 @@ function renderPreview(tty, state, messages) {
   const H = termHeight;
 
   const session = filtered[cursor] || {};
-  const firstMsg = session.firstMessage || '';
+  const firstMsg = session.customTitle || session.firstMessage || '';
 
   tty.write('\x1b[H\x1b[2J');
 
@@ -1235,7 +1245,7 @@ function renderDeleteConfirm(tty, state, session) {
   const contentLines = [
     style(centerText('Delete this session?'), '1'),
     centerText(''),
-    style(centerText(truncate(`"${session.firstMessage}"`, innerW)), '2'),
+    style(centerText(truncate(`"${session.customTitle || session.firstMessage}"`, innerW)), '2'),
     centerText(`${dateStr}  ${sizeStr}  ${countStr}`),
     centerText(''),
     centerText('[Y] Yes, delete    [N] No, cancel'),
