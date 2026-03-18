@@ -31,48 +31,218 @@ const DELETE_ID    = getFlagValue('--delete');
 const PROJECTS_DIR = getFlagValue('--projects-dir') || path.join(os.homedir(), '.claude', 'projects');
 
 // ---------------------------------------------------------------------------
-// Session helpers
+// formatSize
 // ---------------------------------------------------------------------------
 
 /**
- * Return a flat list of session objects found under PROJECTS_DIR.
- * Each session is a *.jsonl file; we expose id (filename sans extension),
- * project (parent directory name), and the full file path.
+ * Format a byte count into a human-readable string.
+ * <1024 → "{n}B", <1048576 → "{n}K", >=1048576 → "{n.n}M"
  *
- * @returns {{ id: string, project: string, filePath: string }[]}
+ * @param {number} bytes
+ * @returns {string}
  */
-function listSessions() {
-  const sessions = [];
+function formatSize(bytes) {
+  if (bytes < 1024) {
+    return `${bytes}B`;
+  }
+  if (bytes < 1048576) {
+    return `${Math.floor(bytes / 1024)}K`;
+  }
+  return `${(bytes / 1048576).toFixed(1)}M`;
+}
 
-  if (!fs.existsSync(PROJECTS_DIR)) {
-    return sessions;
+// ---------------------------------------------------------------------------
+// scanSessions
+// ---------------------------------------------------------------------------
+
+/**
+ * Derive a human-readable project name from a directory name of the form
+ * "-Users-{username}-Some-Path" → "~/Some/Path".
+ * Falls back to the raw directory name if the pattern doesn't match.
+ *
+ * @param {string} dirName
+ * @returns {string}
+ */
+function projectFromDirName(dirName) {
+  // Match -Users-<username>-... or -Users-<username> (no trailing path)
+  const match = dirName.match(/^-Users-[^-]+(-(.+))?$/);
+  if (match) {
+    if (match[2]) {
+      // Replace remaining dashes with slashes
+      return '~/' + match[2].replace(/-/g, '/');
+    }
+    return '~';
+  }
+  return dirName;
+}
+
+/**
+ * Shorten an absolute path by replacing the home directory prefix with "~".
+ *
+ * @param {string} cwdValue
+ * @param {string} [homeDir] - Defaults to os.homedir()
+ * @returns {string}
+ */
+function shortenCwd(cwdValue, homeDir) {
+  const home = homeDir || os.homedir();
+  if (cwdValue === home) return '~';
+  if (cwdValue.startsWith(home + '/')) {
+    return '~' + cwdValue.slice(home.length);
+  }
+  return cwdValue;
+}
+
+/**
+ * Scan projectsDir for session files and return rich metadata for each.
+ *
+ * Skips:
+ * - Files whose name starts with "agent-"
+ * - Empty files (size === 0)
+ *
+ * @param {string} projectsDir
+ * @param {object} [options]
+ * @param {string} [options.homeDir] - Override os.homedir() for testing
+ * @returns {{
+ *   sessionId: string,
+ *   project: string,
+ *   modified: Date,
+ *   size: number,
+ *   messageCount: number,
+ *   firstMessage: string,
+ *   filePath: string
+ * }[]}
+ */
+function scanSessions(projectsDir, options) {
+  const homeDir = (options && options.homeDir) || os.homedir();
+  const results = [];
+
+  if (!fs.existsSync(projectsDir)) {
+    return results;
   }
 
-  const projectDirs = fs.readdirSync(PROJECTS_DIR, { withFileTypes: true })
+  const subdirs = fs.readdirSync(projectsDir, { withFileTypes: true })
     .filter(d => d.isDirectory())
     .map(d => d.name);
 
-  for (const project of projectDirs) {
-    const projectPath = path.join(PROJECTS_DIR, project);
+  for (const dirName of subdirs) {
+    const dirPath = path.join(projectsDir, dirName);
     let entries;
     try {
-      entries = fs.readdirSync(projectPath, { withFileTypes: true });
+      entries = fs.readdirSync(dirPath, { withFileTypes: true });
     } catch (_) {
       continue;
     }
 
     for (const entry of entries) {
-      if (entry.isFile() && entry.name.endsWith('.jsonl')) {
-        sessions.push({
-          id: entry.name.replace(/\.jsonl$/, ''),
-          project,
-          filePath: path.join(projectPath, entry.name),
-        });
+      if (!entry.isFile()) continue;
+      if (!entry.name.endsWith('.jsonl')) continue;
+
+      const sessionId = entry.name.replace(/\.jsonl$/, '');
+
+      // Skip agent- prefixed files
+      if (sessionId.startsWith('agent-')) continue;
+
+      const filePath = path.join(dirPath, entry.name);
+
+      let stat;
+      try {
+        stat = fs.statSync(filePath);
+      } catch (_) {
+        continue;
       }
+
+      // Skip empty files
+      if (stat.size === 0) continue;
+
+      const modified = stat.mtime;
+      const size = stat.size;
+
+      // Read and parse lines
+      let raw;
+      try {
+        raw = fs.readFileSync(filePath, 'utf8');
+      } catch (_) {
+        continue;
+      }
+
+      const lines = raw.split('\n').filter(l => l.trim() !== '');
+
+      // Extract cwd from first entry that has one (scan up to 10 lines)
+      let project = null;
+      const scanLimit = Math.min(lines.length, 10);
+      for (let i = 0; i < scanLimit; i++) {
+        try {
+          const parsed = JSON.parse(lines[i]);
+          if (parsed.cwd) {
+            project = shortenCwd(parsed.cwd, homeDir);
+            break;
+          }
+        } catch (_) {
+          // ignore malformed lines
+        }
+      }
+
+      // Fall back to deriving project from directory name
+      if (!project) {
+        project = projectFromDirName(dirName);
+      }
+
+      // Count user messages and find first user message text
+      let messageCount = 0;
+      let firstMessage = '';
+
+      for (const line of lines) {
+        try {
+          const parsed = JSON.parse(line);
+          if (parsed.type === 'user' && parsed.message) {
+            messageCount++;
+            if (!firstMessage) {
+              const content = parsed.message.content;
+              if (typeof content === 'string') {
+                firstMessage = content;
+              } else if (Array.isArray(content)) {
+                const textBlock = content.find(b => b.type === 'text' && typeof b.text === 'string');
+                if (textBlock) {
+                  firstMessage = textBlock.text;
+                }
+              }
+              // Truncate to 80 chars
+              if (firstMessage.length > 80) {
+                firstMessage = firstMessage.slice(0, 80);
+              }
+            }
+          }
+        } catch (_) {
+          // ignore malformed lines
+        }
+      }
+
+      results.push({ sessionId, project, modified, size, messageCount, firstMessage, filePath });
     }
   }
 
-  return sessions;
+  // Sort by modified descending (most recently modified first)
+  results.sort((a, b) => b.modified - a.modified);
+
+  return results;
+}
+
+// ---------------------------------------------------------------------------
+// Legacy helper kept for backward compatibility with previewSession/deleteSession
+// ---------------------------------------------------------------------------
+
+/**
+ * Return a flat list of session objects found under PROJECTS_DIR.
+ * Wraps scanSessions for backward compat.
+ *
+ * @returns {{ id: string, project: string, filePath: string }[]}
+ */
+function listSessions() {
+  return scanSessions(PROJECTS_DIR).map(s => ({
+    id: s.sessionId,
+    project: s.project,
+    filePath: s.filePath,
+  }));
 }
 
 /**
@@ -139,7 +309,15 @@ function hasTty() {
 // ---------------------------------------------------------------------------
 
 function handleList() {
-  const sessions = listSessions();
+  const raw = scanSessions(PROJECTS_DIR);
+  const sessions = raw.map(s => ({
+    id: s.sessionId,
+    project: s.project,
+    modified: s.modified.toISOString().slice(0, 10),
+    size: formatSize(s.size),
+    messageCount: s.messageCount,
+    firstMessage: s.firstMessage,
+  }));
   process.stdout.write(JSON.stringify({ mode: 'cli', sessions }) + '\n');
   process.exit(0);
 }
@@ -212,13 +390,18 @@ function main() {
   process.exit(0);
 }
 
-main();
+// Only run main() when executed directly, not when required as a module
+if (require.main === module) {
+  main();
+}
 
 // ---------------------------------------------------------------------------
 // Exports (for testing)
 // ---------------------------------------------------------------------------
 
 module.exports = {
+  scanSessions,
+  formatSize,
   listSessions,
   previewSession,
   deleteSession,

@@ -1,0 +1,6 @@
+{"type":"progress","cwd":"/Users/testuser/Desktop","sessionId":"sess-001","timestamp":"2026-03-17T14:25:00Z","version":"2.1.78"}
+{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Build the authentication system"}]},"timestamp":"2026-03-17T14:25:01Z","sessionId":"sess-001","cwd":"/Users/testuser/Desktop"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"I'll help you build that."}]},"timestamp":"2026-03-17T14:25:30Z","sessionId":"sess-001"}
+{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Add JWT support"}]},"timestamp":"2026-03-17T14:26:00Z","sessionId":"sess-001","cwd":"/Users/testuser/Desktop"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Sure, adding JWT."}]},"timestamp":"2026-03-17T14:26:30Z","sessionId":"sess-001"}
+{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Now add refresh tokens"}]},"timestamp":"2026-03-17T14:27:00Z","sessionId":"sess-001","cwd":"/Users/testuser/Desktop"}

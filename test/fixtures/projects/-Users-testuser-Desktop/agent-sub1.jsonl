@@ -1,0 +1,2 @@
+{"type":"progress","cwd":"/Users/testuser/Desktop","sessionId":"agent-sub1","timestamp":"2026-03-17T14:25:00Z"}
+{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Subagent task"}]},"timestamp":"2026-03-17T14:25:01Z","sessionId":"agent-sub1"}

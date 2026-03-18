@@ -1,0 +1,2 @@
+{"type":"progress","cwd":"/Users/testuser","sessionId":"sess-003","timestamp":"2026-03-15T09:00:00Z"}
+{"type":"user","message":{"role":"user","content":"Help me with Python"},"timestamp":"2026-03-15T09:00:01Z","sessionId":"sess-003","cwd":"/Users/testuser"}

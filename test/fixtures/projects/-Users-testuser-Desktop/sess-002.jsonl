@@ -1,0 +1,5 @@
+{"type":"file-history-snapshot","messageId":"abc","snapshot":{"timestamp":"2026-03-16T10:00:00Z"}}
+{"type":"progress","sessionId":"sess-002","timestamp":"2026-03-16T10:00:01Z"}
+{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Fix the login bug"}]},"timestamp":"2026-03-16T10:00:02Z","cwd":"/Users/testuser/Desktop","sessionId":"sess-002"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Let me look at the login code."}]},"timestamp":"2026-03-16T10:00:30Z","sessionId":"sess-002"}
+{"type":"user","message":{"role":"user","content":[{"type":"text","text":"The issue is in session expiry"}]},"timestamp":"2026-03-16T10:01:00Z","sessionId":"sess-002","cwd":"/Users/testuser/Desktop"}
