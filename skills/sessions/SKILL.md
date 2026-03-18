@@ -6,61 +6,69 @@ allowed-tools: [Bash, Read]
 
 # Session Manager
 
-Use this skill to browse, preview, and delete Claude Code sessions stored on the local machine.
+Browse, preview, and delete Claude Code sessions stored on this machine.
 
-## How to Invoke the Script
+## Step 1: Try Interactive Mode
 
-Run the session picker script using Bash:
+Run the session picker script:
 
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/skills/sessions/scripts/session-picker.cjs"
 ```
 
-## Interactive Mode vs CLI Fallback Mode
+## Step 2: Check the Output
 
-After running the script, check its output:
+**If the output is `{"mode":"cli","reason":"no-tty"}`**, the interactive TUI could not launch. Tell the user:
 
-### Interactive Mode
+> For the full interactive TUI, run this in your terminal:
+> ```
+> node "${CLAUDE_PLUGIN_ROOT}/skills/sessions/scripts/session-picker.cjs"
+> ```
+> Or I can manage sessions for you here. What would you like to do?
 
-If the script exits without printing `{"mode":"cli",...}` JSON to stdout, it ran in interactive mode — the user interacted with the TUI directly. Parse the final JSON summary line from stdout to determine what happened.
+Then proceed with CLI mediation (Step 3).
 
-### CLI Mediation Mode
+**If the output is JSON with `"action":"exit"`**, the user used the interactive TUI directly. Parse the result:
+- If `deleted` array is empty: "Session browser closed. No changes made."
+- If `deleted` has entries: "Deleted {n} session(s). {remaining} sessions remaining."
 
-If the output contains `"mode":"cli"`, the script could not open a TTY and requires Claude to mediate. Switch to CLI mediation:
+## Step 3: CLI Mediation
 
-1. **List sessions:**
-   ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/skills/sessions/scripts/session-picker.cjs" --list
-   ```
-   Returns a JSON array of session objects.
+When mediating for the user, use these subcommands:
 
-2. **Preview a session:**
-   ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/skills/sessions/scripts/session-picker.cjs" --preview <id>
-   ```
-   Returns the session transcript or metadata for the given session ID.
+**List sessions:**
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/skills/sessions/scripts/session-picker.cjs" --list
+```
+Present the sessions as a numbered list with date, size, message count, project, and first message.
 
-3. **Delete a session:**
-   ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/skills/sessions/scripts/session-picker.cjs" --delete <id>
-   ```
-   Deletes the session with the given ID and confirms deletion.
+**Preview a session:**
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/skills/sessions/scripts/session-picker.cjs" --preview <session-id>
+```
+Show the conversation messages to the user.
 
-### Handling the no-tty Fallback Signal
+**Delete a session:**
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/skills/sessions/scripts/session-picker.cjs" --delete <session-id>
+```
+Always confirm with the user before running this.
 
-If the script outputs exactly `{"mode":"cli","reason":"no-tty"}`, it means no interactive terminal was available. Proceed with CLI mediation: list sessions, present them to the user, ask which to preview or delete, and execute the appropriate subcommand(s).
+**Clean up auto-generated sessions:**
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/skills/sessions/scripts/session-picker.cjs" --clean-auto
+```
+Deletes all local-command sessions (/exit, /clear artifacts) in one shot. Run this when the user asks to clean up junk sessions or auto-generated sessions.
 
 ## Output Contract
 
-After all operations are complete, report results to the user using the following phrases:
-
-- If **no sessions were deleted**: "Session browser closed. No changes made."
-- If **one or more sessions were deleted**: "Deleted {n} session(s). {remaining} sessions remaining."
-
-Where `{n}` is the count of deleted sessions and `{remaining}` is the count of sessions still present after deletion.
+After operations complete, report:
+- No deletions: "Session browser closed. No changes made."
+- Deletions: "Deleted {n} session(s). {remaining} sessions remaining."
+- Clean-auto: report the `message` field from the JSON output directly.
 
 ## Notes
 
-- Session data is stored under `~/.claude/projects/`
-- Each session is a JSONL file containing the conversation turns
-- Always confirm with the user before deleting a session
+- Session data lives in `~/.claude/projects/` — every project the user has ever run Claude from
+- Each session is a JSONL file containing conversation turns
+- Always confirm before deleting
